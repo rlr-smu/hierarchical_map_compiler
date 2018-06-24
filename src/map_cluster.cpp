@@ -76,7 +76,7 @@ MapCluster *MapCluster::MapClusterFromNetworkJson(
   if (json_spec.find("nodes") != json_spec.end()) {
     // This is a leaf node
     std::unordered_set<NodeSize> nodes;
-    for (auto cur_node : json_spec["nodes"]){
+    for (auto cur_node : json_spec["nodes"]) {
       NodeSize cur_node_index = cur_node;
       nodes.insert(cur_node_index);
     }
@@ -200,8 +200,20 @@ Vtree *MapCluster::GenerateLocalVtree(
     const std::unordered_map<MapCluster *, SddLiteral> *cluster_variable_map,
     const std::unordered_map<Edge *, SddLiteral> *edge_variable_map) const {
   if (left_child_ == nullptr) {
-    return GenerateVtreeUsingMinFillOfPrimalGraph(internal_edges_,
-                                                  edge_variable_map);
+    vector<Edge *> internal_edges(internal_edges_.begin(),
+                                  internal_edges_.end());
+    Graph *leaf_region_graph =
+        Graph::GraphFromEdgeList(std::move(internal_edges));
+    auto edge_order = leaf_region_graph->GreedyEdgeOrder();
+    vector<SddLiteral> ordered_variable_indexes;
+    for (Edge *cur_edge : edge_order) {
+      ordered_variable_indexes.push_back(
+          edge_variable_map->find(cur_edge)->second);
+    }
+    return GenerateRLVtree(ordered_variable_indexes, 0);
+    delete (leaf_region_graph);
+    // return GenerateVtreeUsingMinFillOfPrimalGraph(internal_edges_,
+    //                                              edge_variable_map);
   } else {
     std::vector<SddLiteral> sdd_literals_cur_cluster;
     auto left_cluster_it = cluster_variable_map->find(left_child_);
