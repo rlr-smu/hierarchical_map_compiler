@@ -1,0 +1,797 @@
+//
+// Created by Jason Shen on 6/12/18.
+//
+
+extern "C" {
+#include "sddapi.h"
+}
+
+#include <psdd_node.h>
+#include <algorithm>
+#include <htd/main.hpp>
+#include <list>
+#include <map>
+#include <memory>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+#include "edge.h"
+#include "graph.h"
+#include "leaf_constraint_handler.h"
+
+namespace {
+using std::list;
+using std::map;
+using std::max;
+using std::min;
+using std::pair;
+using std::set;
+using std::unique_ptr;
+using std::unordered_map;
+using std::vector;
+const int PI = 198761234;
+
+SddNode *NegativeTerm(SddManager *manager) {
+  SddLiteral variable_size = sdd_vtree_var_count(sdd_manager_vtree(manager));
+  SddNode *result = sdd_manager_true(manager);
+  for (SddLiteral i = 1; i <= variable_size; ++i) {
+    result = sdd_conjoin(sdd_manager_literal(-i, manager), result, manager);
+  }
+  return result;
+}
+// number of results should be (2N!)/(N! * 2^N), where conn has size 2N
+vector<vector<pair<intmax_t, intmax_t>>> enumeratePats(vector<intmax_t> conn) {
+  intmax_t s = conn.size();
+  assert(s % 2 == 0);
+  vector<vector<pair<intmax_t, intmax_t>>> res;
+  if (s == 0) {  // cant make any more pairs
+    return vector<vector<pair<intmax_t, intmax_t>>>(1);
+  }
+  for (intmax_t i = 1; i < s; i++) {
+    vector<intmax_t> rest;
+    for (intmax_t j = 1; j < s; j++)
+      if (j != i) rest.push_back(conn[j]);
+    vector<vector<pair<intmax_t, intmax_t>>> recur = enumeratePats(rest);
+    for (intmax_t j = 0; j < (intmax_t)recur.size(); j++) {
+      recur[j].push_back({conn[0], conn[i]});
+      res.push_back(recur[j]);
+    }
+  }
+  return res;
+}
+
+bool next_combination(intmax_t &mask, intmax_t numElements) {
+  if (!mask) return false;
+
+  // details at
+  // http://graphics.stanford.edu/~seander/bithacks.html#NextBitPermutation
+  // compute the lexicographically next size-i subset
+  intmax_t t = mask | (mask - 1);
+  mask = (t + 1) | (((~t & -~t) - 1) >> (__builtin_ctz(mask) + 1));
+  return (mask < (1LL << numElements));
+}
+
+struct VtreeData {
+  Graph *graph_;
+  vector<bool> edges_;
+  vector<bool> frontier;
+  vector<bool> inner_nodes;
+  explicit VtreeData(Graph *graph) : graph_(graph) {
+    edges_.resize(graph->edges().size() + 1, false);
+    frontier.resize((size_t)graph_->node_size() + 1, false);
+    inner_nodes.resize((size_t)graph_->node_size() + 1, false);
+  }
+  void operator|=(const VtreeData &other) {
+    auto num_edges = graph_->edges().size();
+    for (EdgeSize i = 1; i <= (EdgeSize)num_edges; i++)
+      edges_[i] = (edges_[i] | other.edges_[i]);
+  }
+  void set_frontier() {
+    auto num_nodes = graph_->node_size();
+    auto num_edges = graph_->edges().size();
+    const auto &graph_edges = graph_->edges();
+    vector<bool> g1((size_t)num_nodes + 1, false);
+    vector<bool> g2((size_t)num_nodes + 1, false);
+    for (EdgeSize i = 1; i <= (EdgeSize)num_edges; i++) {
+      if (edges_[i]) {
+        g1[graph_edges[i - 1]->x_node_index()] =
+            g1[graph_edges[i - 1]->y_node_index()] = 1;
+        inner_nodes[graph_edges[i - 1]->x_node_index()] =
+            inner_nodes[graph_edges[i - 1]->y_node_index()] = 1;
+      } else
+        g2[graph_edges[i - 1]->x_node_index()] =
+            g2[graph_edges[i - 1]->y_node_index()] = 1;
+    }
+    for (auto i = 1; i <= num_nodes; i++) {
+      frontier[i] = g1[i] && g2[i];
+    }
+  }
+};
+
+struct Node {
+  vector<SddLiteral> m;  // matching
+  int term;              // 1 is true, 2 is false, -1 is empty
+  SddLiteral
+      label;  // +/- edge number (i.e. -3 means -C, 2 means +B in final SDD)
+  vector<pair<Node *, Node *>> children;
+  bool processed;
+  Node(Graph *graph, NodeSize source_node, NodeSize target_node) {
+    auto num_nodes = (size_t)graph->node_size();
+    m.resize(num_nodes + 1);
+    for (NodeSize i = 1; i <= (NodeSize)num_nodes; i++) m[i] = i;
+    m[source_node] = -1 * target_node, m[target_node] = -1 * source_node;
+    term = 0;
+    label = 0;
+    processed = false;
+  }
+  Node(const Node *cp) {
+    m = cp->m;
+    term = cp->term;
+    label = cp->label;
+    children = cp->children;
+    processed = false;
+  }
+};
+
+bool is_one_term(const Node *r) { return r->term == 1; }
+
+bool is_zero_term(const Node *r) { return r->term == 2; }
+
+bool is_empty_term(const Node *r) { return r->term == -1; }
+
+bool finished(Node *s) {
+  auto num_nodes = s->m.size() - 1;
+  for (NodeSize i = 1; i <= (NodeSize)num_nodes; i++)
+    if (s->m[i] != 0 && s->m[i] != i) return false;
+  return true;
+}
+
+inline SddLiteral sgn(SddLiteral x) { return (x > 0) - (x < 0); }
+
+bool isShannon(Vtree *vtree) {
+  return sdd_vtree_is_leaf(sdd_vtree_left(vtree)) ||
+         sdd_vtree_is_leaf(sdd_vtree_right(vtree));
+}
+
+struct equal_node {
+  bool operator()(const Node *n1, const Node *n2) const {
+    if (is_one_term(n1) != is_one_term(n2)) return false;
+    if (is_zero_term(n1) != is_zero_term(n2)) return false;
+    if (is_empty_term(n1) != is_empty_term(n2)) return false;
+    if (n1->label != n2->label) return false;
+    auto num_nodes = n1->m.size() - 1;
+    for (NodeSize i = 1; i <= (NodeSize)num_nodes; i++)
+      if (n1->m[i] != n2->m[i]) return false;
+    return true;
+  }
+};
+struct hash_node {
+  size_t operator()(const Node *node) const {
+    size_t res = 0;
+    auto num_nodes = node->m.size() - 1;
+    for (NodeSize i = 1; i <= (NodeSize)num_nodes; i++)
+      res ^= node->m[i] + 0x9e3779b9 + (res << 6) + (res >> 2);
+    return res;
+  }
+};
+
+class SddSimplePathCompilerImplement : public LeafConstraintHandler {
+ public:
+  SddSimplePathCompilerImplement(const vector<Edge *> &edges) : edges_(edges) {
+    std::vector<Edge *> new_edges(edges.size(), nullptr);
+    NodeSize node_size = 0;
+    EdgeSize edge_index = 0;
+    for (Edge *cur_edge : edges) {
+      auto x_it = node_map_.find(cur_edge->x_node_index());
+      auto y_it = node_map_.find(cur_edge->y_node_index());
+      if (x_it == node_map_.end()) {
+        x_it = node_map_.insert({cur_edge->x_node_index(), ++node_size}).first;
+      }
+      if (y_it == node_map_.end()) {
+        y_it = node_map_.insert({cur_edge->y_node_index(), ++node_size}).first;
+      }
+      new_edges[edge_index++] =
+          new Edge(cur_edge->edge_name(), x_it->second, y_it->second);
+    }
+    graph_ = Graph::GraphFromStolenEdgeList(std::move(new_edges));
+    vtree_ = nullptr;
+  }
+  ~SddSimplePathCompilerImplement() override {
+    if (vtree_ != nullptr) {
+      auto vtree_nodes = vtree_util::SerializeVtree(vtree_);
+      for (Vtree *cur_vtree : vtree_nodes) {
+        auto cur_vtree_data = (VtreeData *)sdd_vtree_data(cur_vtree);
+        delete (cur_vtree_data);
+      }
+      for (Node *cur_node : constructed_nodes_) {
+        delete (cur_node);
+      }
+      sdd_vtree_free(vtree_);
+      sdd_manager_free(manager_);
+    }
+    delete graph_;
+  }
+  SddNode *InternalPathConstraint() override {
+    SddNode *result_node = sdd_manager_false(manager_);
+    for (const auto &entry : path_between_nodes_) {
+      result_node = sdd_disjoin(entry.second, result_node, manager_);
+    }
+    return result_node;
+  }
+  SddNode *NonTerminalPathConstraint(NodeSize node_a,
+                                     NodeSize node_b) override {
+    if (node_a == node_b) {
+      return NegativeTerm(manager_);
+    }
+    auto node_a_it = node_map_.find(node_a);
+    auto node_b_it = node_map_.find(node_b);
+    assert(node_a_it != node_map_.end());
+    assert(node_b_it != node_map_.end());
+    std::pair<NodeSize, NodeSize> cache_key(
+        min(node_a_it->second, node_b_it->second),
+        max(node_a_it->second, node_b_it->second));
+    auto cache_it = path_between_nodes_.find(cache_key);
+    assert(cache_it != path_between_nodes_.end());
+    return cache_it->second;
+  }
+  SddNode *TerminalPathConstraint(NodeSize entry_node) override {
+    SddNode *result = NegativeTerm(manager_);
+    auto entry_node_it = node_map_.find(entry_node);
+    assert(entry_node_it != node_map_.end());
+    NodeSize node_size = graph_->node_size();
+    for (NodeSize i = 1; i <= node_size; ++i) {
+      if (i == entry_node_it->second) {
+        continue;
+      }
+      std::pair<NodeSize, NodeSize> cache_key(min(entry_node_it->second, i),
+                                              max(entry_node_it->second, i));
+      auto cache_it = path_between_nodes_.find(cache_key);
+      assert(cache_it != path_between_nodes_.end());
+      result = sdd_disjoin(result, cache_it->second, manager_);
+    }
+    return result;
+  }
+  void InitConstraints() override {
+    vtree_ = GetVtree();
+    manager_ = sdd_manager_new(vtree_);
+    sdd_manager_auto_gc_and_minimize_off(manager_);
+    auto node_size = graph_->node_size();
+    for (NodeSize i = 1; i <= node_size; ++i) {
+      for (NodeSize j = i + 1; j <= node_size; ++j) {
+        source_node_ = i;
+        target_node_ = j;
+        one_term_ = GetNode(graph_, source_node_, target_node_);
+        zero_term_ = GetNode(graph_, source_node_, target_node_);
+        one_term_->term = 1;
+        zero_term_->term = 2;
+        one_term_->m[source_node_] = one_term_->m[target_node_] = 0;
+        init_vtree_frontier(vtree_);
+        map<Vtree *, vector<Node *>> Z;
+        Z[vtree_] = vector<Node *>(1, rootNode());
+        construct(vtree_, Z);
+        SddNode *cur_node = dfs(vtree_, Z[vtree_][0]);
+        pair<NodeSize, NodeSize> cache_key(source_node_, target_node_);
+        path_between_nodes_[cache_key] = cur_node;
+      }
+    }
+    for (Node *cur_node : constructed_nodes_) {
+      delete (cur_node);
+    }
+    constructed_nodes_.resize(0);
+  }
+  SddManager *sdd_manager() override { return manager_; }
+  Vtree *GetVtree() override {
+    if (vtree_ == nullptr) {
+      vtree_ = VtreeFromMinFillUsingPrimalGraph(graph_);
+    }
+    return vtree_;
+  }
+  const std::vector<Edge *> &edges() override { return edges_; }
+
+ private:
+  std::vector<Edge *> edges_;
+  Vtree *vtree_;
+  SddManager *manager_;
+  Graph *graph_;
+  vector<Node *> constructed_nodes_;
+  Node *zero_term_;
+  Node *one_term_;
+  unordered_map<NodeSize, NodeSize> node_map_;
+  map<std::pair<NodeSize, NodeSize>, SddNode *> path_between_nodes_;
+  NodeSize source_node_;
+  NodeSize target_node_;
+  Node *rootNode() {
+    Node *ret = GetNode(graph_, source_node_, target_node_);
+    return ret;
+  }
+  Node *GetNode(Node *other) {
+    Node *new_node = new Node(other);
+    constructed_nodes_.push_back(new_node);
+    return new_node;
+  }
+  Node *GetNode(Graph *graph, NodeSize source_node, NodeSize target_node) {
+    Node *new_node = new Node(graph, source_node, target_node);
+    constructed_nodes_.push_back(new_node);
+    return new_node;
+  }
+  NodeSize source_node() const { return source_node_; }
+  NodeSize target_node() const { return target_node_; }
+  Graph *graph() const { return graph_; }
+  Node *zero_term() { return zero_term_; }
+  Node *one_term() { return one_term_; }
+
+  SddNode *dfs(Vtree *vtree, Node *r) {
+    if (is_zero_term(r)) return sdd_manager_false(manager_);
+    if (is_one_term(r)) return sdd_manager_true(manager_);
+    if (is_empty_term(r)) return sdd_manager_true(manager_);
+    if (r->label != 0) {
+      if (r->label > 0)
+        return sdd_manager_literal(r->label, manager_);
+      else
+        return sdd_negate(sdd_manager_literal(-1 * r->label, manager_),
+                          manager_);
+    }
+
+    Vtree *lt = sdd_vtree_left(vtree);
+    Vtree *rt = sdd_vtree_right(vtree);
+
+    SddNode *alpha = sdd_manager_false(manager_);
+    SddNode *beta;
+
+    for (uintmax_t i = 0; i < (uintmax_t)r->children.size(); i++) {
+      Node *left = r->children[i].first;
+      Node *right = r->children[i].second;
+
+      SddNode *sl = dfs(lt, left);
+      SddNode *sr = dfs(rt, right);
+
+      beta = sdd_conjoin(sl, sr, manager_);
+      alpha = sdd_disjoin(alpha, beta, manager_);
+    }
+    return alpha;
+  }
+
+  void init_vtree_frontier(Vtree *root) {
+    VtreeData *vd = new VtreeData(graph_);
+    vd->edges_[sdd_vtree_var(root)] = true;
+    Vtree *left = sdd_vtree_left(root);
+    Vtree *right = sdd_vtree_right(root);
+    if (left) {
+      init_vtree_frontier(left);
+      VtreeData *lvd = (VtreeData *)sdd_vtree_data(left);
+      *vd |= *lvd;
+    }
+    if (right) {
+      init_vtree_frontier(right);
+      VtreeData *rvd = (VtreeData *)sdd_vtree_data(right);
+      *vd |= *rvd;
+    }
+    vd->set_frontier();  // IMPORTANT! or else internal Node of vtreedata is
+    // inconsistent
+    sdd_vtree_set_data(vd, root);
+  }
+
+  Node *shannonChild(Vtree *vtree, Node *z, bool guess) {
+    Node *nz = GetNode(z);
+    SddLiteral x = sdd_vtree_var(sdd_vtree_left(vtree));
+    if (!sdd_vtree_is_leaf(sdd_vtree_left(vtree)))  // right child is the leaf
+      x = sdd_vtree_var(sdd_vtree_right(vtree));
+    const auto &graph_edges = graph()->edges();
+    auto ua = graph_edges[x - 1]->x_node_index(),
+         ub = graph_edges[x - 1]->y_node_index();  // edges are 0 indexed while
+    // sdd are 1 indexed
+
+    if (guess) {
+      if (!nz->m[ua] || !nz->m[ub]) {
+        return zero_term();
+      }
+      if (nz->m[ua] == ub && nz->m[ub] == ua) {
+        return zero_term();
+      }
+      if (nz->m[ua] < 0 && nz->m[ub] < 0 && nz->m[ua] != -1 * ua &&
+          nz->m[ub] != -1 * ub) {  // a and b are reserved
+        if (nz->m[ua] == -1 * ub &&
+            nz->m[ub] == -1 * ua) {  // check if reserved for each other
+          nz->m[ua] = nz->m[ub] = 0;
+          if (finished(nz)) {
+            goto label;
+            return nz;
+          }
+        } else
+          return zero_term();
+      } else {
+        if (nz->m[ua] == -1 * ua) nz->m[ua] = ua;
+        if (nz->m[ub] == -1 * ub) nz->m[ub] = ub;
+        auto ta = nz->m[ua], tb = nz->m[ub];
+        auto sa = sgn(nz->m[ua]), sb = sgn(nz->m[ub]);
+        auto ss = (sa == -1 || sb == -1) ? -1 : 1;
+        nz->m[ua] = nz->m[ub] = 0;
+        nz->m[(size_t)sa * ta] = ss * sb * tb;
+        nz->m[(size_t)sb * tb] = ss * sa * ta;
+        if (finished(nz)) {
+          goto label;
+          return nz;
+        }
+      }
+    }
+
+  label:
+    if (!sdd_vtree_is_leaf(sdd_vtree_left(vtree)))  // right child is the leaf
+      return nz;
+
+    //
+    // line 19-21 in paper
+    //
+    VtreeData *vd = (VtreeData *)sdd_vtree_data(vtree);
+    VtreeData *rvd = (VtreeData *)sdd_vtree_data(sdd_vtree_right(vtree));
+    auto num_nodes = graph()->node_size();
+    for (auto i = 1; i <= num_nodes; i++) {
+      // set difference: F(v) \ F(vr)
+      if (!(rvd->frontier[i]) && (vd->frontier[i])) {
+        if (nz->m[i] != 0 && nz->m[i] != i) return zero_term();
+        nz->m[i] = 0;
+      }
+    }
+
+    if (!sdd_vtree_is_leaf(sdd_vtree_right(vtree))) return nz;
+
+    SddLiteral y = sdd_vtree_var(sdd_vtree_right(vtree));
+
+    if (finished(nz)) {
+      Node *justY = GetNode(graph(), source_node(), target_node());
+      justY->label = -1 * y;
+      justY->m[source_node()] = justY->m[target_node()] = 0;
+      return justY;
+    }
+    ua = graph_edges[y - 1]->x_node_index(),
+    ub = graph_edges[y - 1]->y_node_index();
+
+    if (nz->m[ua] == -1 * ub && nz->m[ub] == -1 * ua) {
+      nz->m[ua] = nz->m[ub] = 0;
+      if (finished(nz)) {
+        Node *justY = GetNode(graph(), source_node(), target_node());
+        justY->label = y;
+        justY->m[source_node()] = justY->m[target_node()] = 0;
+        return justY;
+      }
+    }
+    return zero_term();
+  }
+
+  vector<vector<pair<intmax_t, intmax_t>>> enumerateCombination(
+      vector<vector<pair<intmax_t, intmax_t>>> combs) {
+    uintmax_t mask = 1;
+    auto num_nodes = graph_->node_size();
+    vector<intmax_t> base((size_t)num_nodes + 1, 0);
+    for (NodeSize i = 1; i <= num_nodes; i++) {
+      if (!combs[i].empty()) {
+        base[i] = mask;
+        mask *= combs[i].size();
+      }
+    }
+    vector<vector<pair<intmax_t, intmax_t>>> ret;
+    for (uintmax_t m = 0; m < mask; m++) {
+      vector<pair<intmax_t, intmax_t>> cur((size_t)num_nodes + 1);
+      intmax_t cmask = (intmax_t)m;
+      for (intmax_t i = num_nodes; i >= 1; i--) {
+        if (!combs[i].empty()) {
+          cur[i] = combs[i][cmask / base[i]];
+          cmask %= base[i];
+        }
+      }
+      ret.emplace_back(cur);
+    }
+    return ret;
+  }
+
+  vector<pair<Node *, Node *>> decompChild(Vtree *vtree, Node *z) {
+    Vtree *vtl = sdd_vtree_left(vtree);
+    Vtree *vtr = sdd_vtree_right(vtree);
+    // VtreeData* vd = (VtreeData*)sdd_vtree_data(vtree);
+    VtreeData *lvd = (VtreeData *)sdd_vtree_data(vtl);
+    VtreeData *rvd = (VtreeData *)sdd_vtree_data(vtr);
+
+    vector<pair<Node *, Node *>> elems;
+    auto num_nodes = graph_->node_size();
+    vector<bool> common((size_t)num_nodes + 1, false);
+    for (auto i = 1; i <= num_nodes; i++)
+      common[i] = lvd->frontier[i] && rvd->frontier[i];
+
+    Node *mp = GetNode(z);
+    Node *ms = GetNode(z);
+
+    for (auto i = 1; i <= num_nodes; i++) {
+      if (!(lvd->frontier[i]) && rvd->frontier[i]) {
+        mp->m[i] = 0;
+      }
+      if (!(rvd->inner_nodes[i]) && lvd->frontier[i]) {
+        ms->m[i] = 0;
+      }
+    }
+
+    //
+    //	Conditioning on goal node. TODO??
+    //
+    if (!common[target_node_]) {
+      assert(
+          !(lvd->inner_nodes[target_node_] && rvd->inner_nodes[target_node_]));
+      if (lvd->inner_nodes[target_node_]) {
+        ms->m[target_node_] = 0;
+      } else if (rvd->inner_nodes[target_node_]) {
+        mp->m[target_node_] = 0;
+      }
+    }
+
+    if (!common[source_node_]) {
+      assert(
+          !(lvd->inner_nodes[source_node_] && rvd->inner_nodes[source_node_]));
+      if (lvd->inner_nodes[source_node_]) {
+        ms->m[source_node_] = 0;
+      } else if (rvd->inner_nodes[source_node_]) {
+        mp->m[source_node_] = 0;
+      }
+    }
+    // line 6 to 14
+    vector<vector<pair<intmax_t, intmax_t>>> combs((size_t)num_nodes + 1);
+    for (auto i = 1; i <= num_nodes; i++) {
+      if (!common[i]) continue;
+      if (!mp->m[i]) {
+        combs[i] = {{0, 0}};
+      } else if (mp->m[i] == i) {
+        combs[i] = {{-1 * i, 0}, {0, i}, {PI, PI}};
+      } else if (mp->m[i] == -1 * i) {
+        combs[i] = {{-1 * i, 0}, {0, -1 * i}, {PI, PI}};
+      } else {
+        combs[i] = {{mp->m[i], 0}, {0, ms->m[i]}};
+      }
+    }
+    vector<vector<pair<intmax_t, intmax_t>>> combList =
+        enumerateCombination(combs);
+    for (size_t kk = 0; kk < combList.size(); kk++) {
+      vector<pair<intmax_t, intmax_t>> vals = combList[kk];
+      // line 16
+      auto mpp = GetNode(mp);
+      auto mss = GetNode(ms);
+      for (intmax_t i = 1; i <= num_nodes; i++) {
+        if (!common[i]) continue;  // only need to update affected states
+        mpp->m[i] = vals[i].first;
+        mss->m[i] = vals[i].second;
+      }
+      // enumerate connections (line 19)
+      vector<pair<intmax_t, intmax_t>> connections;
+      vector<intmax_t> needConnection;
+      vector<pair<intmax_t, intmax_t>> primeConnectPairs;
+
+      for (NodeSize i = 1; i <= num_nodes; i++) {
+        intmax_t cl = i, cr = mpp->m[i];
+        if (cr == PI) {
+          // common in both frontiers, treat as connection to itself
+          connections.emplace_back(std::make_pair(i, i));
+        } else if (cr > 0 && cr != cl && mss->m[cr] == cl) {
+          assert(mpp->m[cr] == 0);
+          connections.emplace_back(std::make_pair(cl, cr));
+        } else if (cr < 0) {
+          cr *= -1;
+          if (mpp->m[cr] == 0) {
+            needConnection.push_back(cl);
+          } else if (cr > cl) {
+            primeConnectPairs.emplace_back(std::make_pair(cl, cr));
+          }
+        }
+      }
+      // terminates if there are enough connections or
+      // odd number of connections remains.
+      if ((needConnection.size() > connections.size()) ||
+          ((connections.size() - needConnection.size()) % 2 == 1)) {
+        continue;
+      }
+      intmax_t maxPrimeConnectPairs =
+          min((connections.size() - needConnection.size()) / 2,
+              primeConnectPairs.size());
+      for (intmax_t i = 0; i <= maxPrimeConnectPairs; i++) {
+        // initialize a subset of size i
+        intmax_t mask = (1LL << i) - 1;
+        do {
+          vector<intmax_t> pairsCombination;
+          for (size_t j = 0; j < primeConnectPairs.size(); j++) {
+            if (mask & (1LL << j)) pairsCombination.push_back(j);
+          }
+          // need 1*needConnection + 2*primePairs number connections
+          intmax_t needConnectCombsSize =
+              needConnection.size() + pairsCombination.size() * 2;
+          vector<intmax_t> needConnectCombs((size_t)needConnectCombsSize);
+          intmax_t c_mask = (1LL << needConnectCombsSize) - 1;
+          do {
+            needConnectCombs.clear();
+            for (size_t j = 0; j < connections.size(); j++) {
+              if (c_mask & (1LL << j)) {
+                needConnectCombs.push_back(j);
+              }
+            }
+            vector<intmax_t> perms((size_t)needConnectCombsSize);
+            iota(perms.begin(), perms.end(), 0);
+            assert(perms.size() == needConnectCombs.size());
+            vector<intmax_t>
+                remainConnections;  // conections not used for needConnection
+            // and primePairs
+            {
+              intmax_t combIdx = 0;
+              for (size_t j = 0; j < connections.size(); j++) {
+                if (combIdx < needConnectCombsSize &&
+                    needConnectCombs[combIdx] == (intmax_t)j) {
+                  combIdx += 1;
+                } else {
+                  remainConnections.push_back(j);
+                }
+              }
+            }
+            assert(remainConnections.size() ==
+                   (connections.size() - needConnectCombs.size()));
+            do {
+              Node *mppp = GetNode(mpp);
+              Node *msss = GetNode(mss);
+              // update mppp and msss by reflecting connections of needConnect
+              for (size_t j = 0; j < needConnection.size(); j++) {
+                intmax_t needConnectItem = needConnection[j];
+                pair<intmax_t, intmax_t> gatePair =
+                    connections[needConnectCombs[perms[j]]];
+                intmax_t tmp = mppp->m[needConnectItem];
+                mppp->m[needConnectItem] = -1 * gatePair.first;
+                mppp->m[gatePair.first] = -1 * needConnectItem;
+                msss->m[gatePair.second] = tmp;
+                msss->m[-1 * tmp] = -1 * gatePair.second;
+              }
+
+              // update mppp and msss by reflecting connections of
+              // primeConnectPairs
+              for (size_t j = 0; j < pairsCombination.size(); j++) {
+                pair<intmax_t, intmax_t> primePair =
+                    primeConnectPairs[pairsCombination[j]];
+                intmax_t l = 2 * j + needConnection.size();
+                pair<intmax_t, intmax_t> pairFirstConnection =
+                    connections[needConnectCombs[perms[l]]];
+                pair<intmax_t, intmax_t> pairSecondConnection =
+                    connections[needConnectCombs[perms[l + 1]]];
+
+                mppp->m[primePair.first] = -1 * pairFirstConnection.first;
+                mppp->m[pairFirstConnection.first] = -1 * primePair.first;
+
+                mppp->m[primePair.second] = -1 * pairSecondConnection.first;
+                mppp->m[pairSecondConnection.first] = -1 * primePair.second;
+
+                msss->m[pairFirstConnection.second] =
+                    -1 * pairSecondConnection.second;
+                msss->m[pairSecondConnection.second] =
+                    -1 * pairFirstConnection.second;
+              }
+
+              // update mppp and msss by reflecting connections of two
+              // connection pairs
+              vector<intmax_t> v_pairs(connections.size() -
+                                       needConnectCombs.size());
+              iota(v_pairs.begin(), v_pairs.end(), 0);
+              vector<vector<pair<intmax_t, intmax_t>>> allPairsPartPatterns =
+                  enumeratePats(v_pairs);
+
+              // genAllPairPartitions(n) is the set of all possible partitions
+              // of pairs. If n = 4, then genAllPairPartitions(4) returns {((1,
+              // 2), (3, 4)), ((1, 3), (2, 4)),  ((1, 4), (2, 3))}.
+              // allPairPartPatterns are used to determine the possible pairs of
+              // remaining connections.
+
+              if (!allPairsPartPatterns.empty()) {
+                for (size_t j = 0; j < allPairsPartPatterns.size(); j++) {
+                  vector<pair<intmax_t, intmax_t>> partition =
+                      allPairsPartPatterns[j];
+
+                  Node *mp4 = new Node(mppp);
+                  Node *ms4 = new Node(msss);
+
+                  for (size_t k = 0; k < partition.size(); k++) {
+                    pair<intmax_t, intmax_t> pp = partition[k];
+                    intmax_t parity = 1;
+                    if (pp.first > pp.second) parity = -1;
+                    pair<intmax_t, intmax_t> pairA =
+                        connections[remainConnections[pp.first]];
+                    pair<intmax_t, intmax_t> pairB =
+                        connections[remainConnections[pp.second]];
+
+                    mp4->m[pairA.first] = -1 * parity * pairB.first;
+                    mp4->m[pairB.first] = -1 * parity * pairA.first;
+
+                    ms4->m[pairA.second] = 1 * parity * pairB.second;
+                    ms4->m[pairB.second] = 1 * parity * pairA.second;
+                  }
+                  elems.push_back({mp4, ms4});
+                }
+              } else {
+                elems.push_back({mppp, msss});
+              }
+
+            } while (next_permutation(perms.begin(), perms.end()));
+
+          } while (next_combination(c_mask, connections.size()));
+
+        } while (next_combination(mask, primeConnectPairs.size()));
+      }
+    }
+    return elems;
+  }
+  void construct(Vtree *vtree, std::map<Vtree *, vector<Node *>> &Z) {
+    std::unordered_map<Node *, Node *, hash_node, equal_node> mml, mmr;
+    Vtree *vtl = sdd_vtree_left(vtree);
+    Vtree *vtr = sdd_vtree_right(vtree);
+    vector<Node *> vz = Z[vtree];  // check initialization
+    if (isShannon(vtree)) {
+      for (size_t i = 0; i < vz.size(); i++) {
+        Node *z = vz[i];
+        if (z->processed) continue;
+
+        Node *mf = shannonChild(vtree, z, false);
+        Node *mt = shannonChild(vtree, z, true);
+
+        SddLiteral x = sdd_vtree_var(vtl);
+
+        if (!sdd_vtree_is_leaf(vtl))  // right child is the leaf
+          x = sdd_vtree_var(vtr);
+        if (!is_zero_term(mf)) {
+          Node *justX = GetNode(graph_, source_node_, target_node_);
+          justX->label = -1 * x;
+          if (!sdd_vtree_is_leaf(vtl))
+            z->children.emplace_back(std::make_pair(mf, justX));
+          else
+            z->children.emplace_back(std::make_pair(justX, mf));
+        }
+        if (!is_zero_term(mt)) {
+          Node *justX = GetNode(graph_, source_node_, target_node_);
+          justX->label = x;
+          if (!sdd_vtree_is_leaf(vtl))
+            z->children.emplace_back(std::make_pair(mt, justX));
+          else
+            z->children.emplace_back(std::make_pair(justX, mt));
+        }
+        for (size_t i = 0; i < z->children.size(); i++) {
+          if (mml.find(z->children[i].first) == mml.end())
+            mml[z->children[i].first] = z->children[i].first;
+          if (mmr.find(z->children[i].second) == mmr.end())
+            mmr[z->children[i].second] = z->children[i].second;
+          z->children[i].first = mml[z->children[i].first];
+          z->children[i].second = mmr[z->children[i].second];
+          Z[vtl].push_back(z->children[i].first);
+          Z[vtr].push_back(z->children[i].second);
+        }
+        z->processed = true;
+      }
+      assert(sdd_vtree_is_leaf(vtl) || sdd_vtree_is_leaf(vtr));
+      if (!sdd_vtree_is_leaf(vtl)) construct(vtl, Z);
+      if (!sdd_vtree_is_leaf(vtr)) construct(vtr, Z);
+    } else {
+      for (size_t i = 0; i < vz.size(); i++) {
+        Node *z = vz[i];
+        if (z->processed) continue;
+        z->children = decompChild(vtree, z);  // optimize later using uniqueness
+        for (size_t i = 0; i < z->children.size(); i++) {
+          if (mml.find(z->children[i].first) == mml.end())
+            mml[z->children[i].first] = z->children[i].first;
+          if (mmr.find(z->children[i].second) == mmr.end())
+            mmr[z->children[i].second] = z->children[i].second;
+          z->children[i].first = mml[z->children[i].first];
+          z->children[i].second = mmr[z->children[i].second];
+          Z[vtl].push_back(z->children[i].first);
+          Z[vtr].push_back(z->children[i].second);
+        }
+        z->processed = true;
+      }
+      construct(vtl, Z);
+      construct(vtr, Z);
+    }
+  }
+};
+}  // namespace
+
+namespace binary_hierarchical_map {
+LeafConstraintHandler *LeafConstraintHandler::GetSddLeafConstraintHandler(
+    const std::vector<binary_hierarchical_map::Edge *> &edges) {
+  return new SddSimplePathCompilerImplement(edges);
+}
+}  // namespace binary_hierarchical_map
