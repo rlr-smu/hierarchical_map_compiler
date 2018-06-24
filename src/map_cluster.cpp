@@ -75,8 +75,11 @@ MapCluster *MapCluster::MapClusterFromNetworkJson(
     const std::unordered_map<std::string, MapCluster *> &constructed_clusters) {
   if (json_spec.find("nodes") != json_spec.end()) {
     // This is a leaf node
-    std::unordered_set<NodeSize> nodes(json_spec["nodes"].begin(),
-                                       json_spec["nodes"].end());
+    std::unordered_set<NodeSize> nodes;
+    for (auto cur_node : json_spec["nodes"]){
+      NodeSize cur_node_index = cur_node;
+      nodes.insert(cur_node_index);
+    }
     return new MapCluster(cluster_index, cluster_name, nodes, nullptr, nullptr);
   } else {
     // This is an internal node
