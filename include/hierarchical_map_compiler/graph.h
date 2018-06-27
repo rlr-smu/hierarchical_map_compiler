@@ -5,13 +5,13 @@
 #ifndef HIERARCHICAL_MAP_GRAPH_H
 #define HIERARCHICAL_MAP_GRAPH_H
 
+#include <hierarchical_map_compiler/edge.h>
 #include <nlohmann/json.hpp>
 #include <set>
 #include <unordered_map>
 #include <vector>
-#include "edge.h"
 extern "C" {
-#include "sddapi.h"
+#include <sdd/sddapi.h>
 }
 
 using json = nlohmann::json;

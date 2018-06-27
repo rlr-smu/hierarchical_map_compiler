@@ -5,12 +5,12 @@
 #ifndef HIERARCHICAL_MAP_MAP_CLUSTER_H
 #define HIERARCHICAL_MAP_MAP_CLUSTER_H
 
+#include <hierarchical_map_compiler/graph.h>
+#include <hierarchical_map_compiler/types.h>
+#include <psdd/psdd_manager.h>
 #include <nlohmann/json.hpp>
 #include <unordered_map>
 #include <unordered_set>
-#include "graph.h"
-#include "psdd_manager.h"
-#include "types.h"
 using json = nlohmann::json;
 using std::string;
 using std::unordered_map;

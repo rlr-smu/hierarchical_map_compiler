@@ -1,3 +1,5 @@
+#include <hierarchical_map_compiler/leaf_constraint_handler.h>
+#include <hierarchical_map_compiler/map_cluster.h>
 #include <array>
 #include <cinttypes>
 #include <fstream>
@@ -11,10 +13,8 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include "leaf_constraint_handler.h"
-#include "map_cluster.h"
 extern "C" {
-#include <sddapi.h>
+#include <sdd/sddapi.h>
 }
 
 using nlohmann::json;
@@ -270,7 +270,8 @@ class GraphillionLeafConstraintHandler : public LeafConstraintHandler {
   }
   const map<pair<NodeSize, NodeSize>, SddNode *> &non_terminal_path_constraint(
       MapCluster *leaf_cluster) override {
-    assert(leaf_cluster->left_child() == nullptr && leaf_cluster->right_child() == nullptr);
+    assert(leaf_cluster->left_child() == nullptr &&
+           leaf_cluster->right_child() == nullptr);
     auto leaf_cluster_it = non_terminal_path_constraint_.find(leaf_cluster);
     assert(leaf_cluster_it != non_terminal_path_constraint_.end());
     return leaf_cluster_it->second;
@@ -395,7 +396,7 @@ GraphillionLeafConstraintHandler::GraphillionLeafConstraintHandler(
           cur_terminal_constraint;
     }
     // non terminal path constraint
-    non_terminal_path_constraint_ [target_cluster] = {};
+    non_terminal_path_constraint_[target_cluster] = {};
     for (const auto &non_terminal_node_pair : non_terminal_nodes_it->second) {
       if (non_terminal_node_pair.first == non_terminal_node_pair.second) {
         non_terminal_path_constraint_[target_cluster][non_terminal_node_pair] =

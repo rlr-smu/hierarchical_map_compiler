@@ -2,7 +2,7 @@
 // Created by Jason Shen on 5/21/18.
 //
 
-#include "edge.h"
+#include <hierarchical_map_compiler/edge.h>
 #include <algorithm>
 
 Edge::Edge(std::string edge_name, NodeSize x_node_index, NodeSize y_node_index)

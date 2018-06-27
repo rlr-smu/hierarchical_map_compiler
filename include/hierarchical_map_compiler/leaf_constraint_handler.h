@@ -5,14 +5,14 @@
 #ifndef HIERARCHICAL_MAP_LEAF_CONSTRAINT_HANDLER_H
 #define HIERARCHICAL_MAP_LEAF_CONSTRAINT_HANDLER_H
 extern "C" {
-#include <sddapi.h>
+#include <sdd/sddapi.h>
 }
 #include <map>
 #include <set>
 #include <unordered_map>
-#include "edge.h"
-#include "map_cluster.h"
-#include "types.h"
+#include <hierarchical_map_compiler/edge.h>
+#include <hierarchical_map_compiler/map_cluster.h>
+#include <hierarchical_map_compiler/types.h>
 
 class LeafConstraintHandler {
  public:

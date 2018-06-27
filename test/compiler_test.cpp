@@ -3,15 +3,15 @@
 //
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-#include <map_network.h>
-#include <psdd_manager.h>
+#include <hierarchical_map_compiler/edge.h>
+#include <hierarchical_map_compiler/graph.h>
+#include <hierarchical_map_compiler/map_network.h>
+#include <psdd/psdd_manager.h>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <unordered_map>
-#include "edge.h"
-#include "graph.h"
 extern "C" {
-#include "sddapi.h"
+#include <sdd/sddapi.h>
 }
 using nlohmann::json;
 namespace {

@@ -2,14 +2,14 @@
 // Created by Jason Shen on 5/21/18.
 //
 
-#include "map_cluster.h"
+#include <hierarchical_map_compiler/leaf_constraint_handler.h>
+#include <hierarchical_map_compiler/map_cluster.h>
 #include <algorithm>
 #include <cassert>
 #include <htd/main.hpp>
 #include <unordered_map>
-#include "leaf_constraint_handler.h"
 extern "C" {
-#include <sddapi.h>
+#include <sdd/sddapi.h>
 }
 namespace {
 using std::map;

@@ -5,11 +5,11 @@
 #ifndef HIERARCHICAL_MAP_SDD_SIMPLE_PATH_COMPILER_H
 #define HIERARCHICAL_MAP_SDD_SIMPLE_PATH_COMPILER_H
 extern "C" {
-#include <sddapi.h>
+#include <sdd/sddapi.h>
 }
+#include <hierarchical_map_compiler/graph.h>
+#include <hierarchical_map_compiler/types.h>
 #include <unordered_map>
-#include "graph.h"
-#include "types.h"
 
 class SddSimplePathCompiler {
  public:

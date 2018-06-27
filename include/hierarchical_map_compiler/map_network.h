@@ -4,8 +4,8 @@
 
 #ifndef HIERARCHICAL_MAP_MAP_NETWORK_H
 #define HIERARCHICAL_MAP_MAP_NETWORK_H
-#include "map_cluster.h"
-#include "psdd_node.h"
+#include <hierarchical_map_compiler/map_cluster.h>
+#include <psdd/psdd_node.h>
 
 class MapNetwork {
  public:

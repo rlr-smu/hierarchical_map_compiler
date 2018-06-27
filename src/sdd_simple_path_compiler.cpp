@@ -1,16 +1,16 @@
 extern "C" {
-#include "sddapi.h"
+#include <sdd/sddapi.h>
 }
 
-#include <psdd_node.h>
+#include <hierarchical_map_compiler/edge.h>
+#include <hierarchical_map_compiler/graph.h>
+#include <hierarchical_map_compiler/sdd_simple_path_compiler.h>
+#include <psdd/psdd_node.h>
 #include <algorithm>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include "edge.h"
-#include "graph.h"
-#include "sdd_simple_path_compiler.h"
 
 namespace {
 

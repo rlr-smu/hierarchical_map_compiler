@@ -5,10 +5,10 @@
 #ifndef HIERARCHICAL_MAP_EDGE_H
 #define HIERARCHICAL_MAP_EDGE_H
 
+#include <hierarchical_map_compiler/types.h>
 #include <cstdint>
 #include <nlohmann/json.hpp>
 #include <string>
-#include "types.h"
 
 using nlohmann::json;
 class Edge {

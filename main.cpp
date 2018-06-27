@@ -1,4 +1,8 @@
-#include <map_network.h>
+//
+// Created by Jason Shen on 5/21/18.
+//
+
+#include <hierarchical_map_compiler/map_network.h>
 #include <iostream>
 int main(int argc, const char* argv[]) {
   if (argc <= 4) {

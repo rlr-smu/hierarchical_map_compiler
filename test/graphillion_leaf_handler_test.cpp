@@ -3,16 +3,16 @@
 //
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
+#include <hierarchical_map_compiler/edge.h>
+#include <hierarchical_map_compiler/graph.h>
+#include <hierarchical_map_compiler/leaf_constraint_handler.h>
+#include <hierarchical_map_compiler/map_cluster.h>
 #include <queue>
 #include <set>
 #include <unordered_map>
 #include <vector>
-#include "edge.h"
-#include "graph.h"
-#include "leaf_constraint_handler.h"
-#include "map_cluster.h"
 extern "C" {
-#include "sddapi.h"
+#include <sdd/sddapi.h>
 }
 namespace {
 using std::pair;

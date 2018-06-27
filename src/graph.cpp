@@ -1,7 +1,7 @@
 //
 // Created by Jason Shen on 5/21/18.
 //
-#include "graph.h"
+#include <hierarchical_map_compiler/graph.h>
 #include <algorithm>
 #include <map>
 #include <set>

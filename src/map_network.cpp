@@ -2,7 +2,9 @@
 // Created by Jason Shen on 5/21/18.
 //
 
-#include "map_network.h"
+#include <hierarchical_map_compiler/graph.h>
+#include <hierarchical_map_compiler/leaf_constraint_handler.h>
+#include <hierarchical_map_compiler/map_network.h>
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -12,8 +14,6 @@
 #include <nlohmann/json.hpp>
 #include <unordered_map>
 #include <unordered_set>
-#include "graph.h"
-#include "leaf_constraint_handler.h"
 namespace {
 using ms = std::chrono::milliseconds;
 using get_time = std::chrono::steady_clock;
@@ -234,12 +234,12 @@ MapNetwork::ConstructEntryPointsForNonTerminalPath(
         Edge *second_external_edge = j_it->first;
         auto second_edge_cluster_it =
             edge_cluster_map.find(second_external_edge);
-        if (first_edge_cluster_it->second == second_edge_cluster_it->second){
+        if (first_edge_cluster_it->second == second_edge_cluster_it->second) {
           continue;
         }
-          pair<NodeSize, NodeSize> node_pair(
-              min(first_entering_node, second_entering_node),
-              max(first_entering_node, second_entering_node));
+        pair<NodeSize, NodeSize> node_pair(
+            min(first_entering_node, second_entering_node),
+            max(first_entering_node, second_entering_node));
         if (cur_entering_points.find(node_pair) == cur_entering_points.end()) {
           cur_entering_points.insert(node_pair);
         }
