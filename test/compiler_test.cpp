@@ -6,13 +6,16 @@
 #include <hierarchical_map_compiler/edge.h>
 #include <hierarchical_map_compiler/graph.h>
 #include <hierarchical_map_compiler/map_network.h>
-#include <psdd/psdd_manager.h>
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <psdd/psdd_manager.h>
+#include <string>
 #include <unordered_map>
 extern "C" {
 #include <sdd/sddapi.h>
 }
+
+extern std::string project_script_path;
 using nlohmann::json;
 namespace {
 json GenerateSmall3LayerSpec() {
@@ -44,17 +47,15 @@ json GenerateSmall3LayerSpec() {
   spec["clusters"] = cluster;
   return spec;
 }
-}  // namespace
+} // namespace
 
 TEST(BINARY_HIERARCHICAL_MAP_COMPILER_TEST, SANITY_CHECK_TEST) {
   auto json_spec = GenerateSmall3LayerSpec();
-  MapNetwork* network = MapNetwork::MapNetworkFromJsonSpec(json_spec);
-  network->SetGraphillionCompiler(
-      "/Users/yujias/Documents/hierarchical_map_compiler/script/"
-      "compile_graph.py",
-      "/Users/yujias/Documents/hierarchical_map_compiler/script/test", 4);
+  MapNetwork *network = MapNetwork::MapNetworkFromJsonSpec(json_spec);
+  network->SetGraphillionCompiler(project_script_path + "/compile_graph.py",
+                                  project_script_path + "/test", 4);
   auto result = network->CompileConstraint();
-  PsddNode* psdd_node = result.first;
+  PsddNode *psdd_node = result.first;
   EXPECT_EQ(
       psdd_node_util::ModelCount(psdd_node_util::SerializePsddNodes(psdd_node))
           .get_str(10),
