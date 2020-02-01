@@ -1,7 +1,9 @@
-cmake_minimum_required(VERSION 3.2)
+cmake_minimum_required(VERSION 3.5)
 project(hierarchical_map_compiler)
 include_directories(include)
-#link_directories(lib)
+include_directories(/usr/local/include)
+link_directories(/usr/local/lib)
+
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_C_STANDARD 99)
 include(ExternalProject)
@@ -30,7 +32,7 @@ add_dependencies(psdd psdd_github-build)
 
 ExternalProject_Add(googletest_github
   GIT_REPOSITORY   https://github.com/google/googletest.git
-  GIT_TAG          master
+  GIT_TAG          release-1.10.0 
   STEP_TARGETS build
   EXCLUDE_FROM_ALL TRUE
   )
@@ -39,10 +41,10 @@ ExternalProject_Get_Property(googletest_github binary_dir)
 add_library(gtest UNKNOWN IMPORTED)
 add_library(gtest_main UNKNOWN IMPORTED)
 set_target_properties(gtest PROPERTIES
-  IMPORTED_LOCATION ${binary_dir}/googlemock/gtest/libgtest.a
+  IMPORTED_LOCATION ${binary_dir}/lib/libgtest.a
   )
 set_target_properties(gtest_main PROPERTIES
-  IMPORTED_LOCATION ${binary_dir}/googlemock/gtest/libgtest_main.a
+  IMPORTED_LOCATION ${binary_dir}/lib/libgtest_main.a
   )
 add_dependencies(gtest googletest_github-build)
 add_dependencies(gtest_main googletest_github-build)
@@ -56,6 +58,7 @@ ExternalProject_Add(htd_github
   )
 add_library(htd UNKNOWN IMPORTED)
 ExternalProject_Get_Property(htd_github binary_dir)
+
 if(UNIX AND NOT APPLE)
   set_target_properties(htd PROPERTIES IMPORTED_LOCATION ${binary_dir}/lib/libhtd.so)
 endif(UNIX AND NOT APPLE)
@@ -66,9 +69,6 @@ endif(APPLE)
 add_dependencies(htd htd_github-build)
 
 
-
-
-include_directories(include)
 file(GLOB HIERARCHICAL_MAP_COMPILER_SRC_FILES "src/*.h" "src/*.cpp" "src/*.c")
 file(GLOB HIERARCHICAL_MAP_COMPILER_TEST_SRC_FILES "test/*.cpp")
 add_library(hmc ${HIERARCHICAL_MAP_COMPILER_SRC_FILES})
