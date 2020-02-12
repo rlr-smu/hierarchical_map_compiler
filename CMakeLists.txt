@@ -23,6 +23,7 @@ ExternalProject_Add(psdd_github
   GIT_TAG          master
   STEP_TARGETS build
   EXCLUDE_FROM_ALL TRUE
+  BUILD_COMMAND    make psdd
   )
 add_library(psdd UNKNOWN IMPORTED)
 ExternalProject_Get_Property(psdd_github binary_dir)
