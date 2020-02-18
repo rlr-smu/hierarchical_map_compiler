@@ -69,6 +69,6 @@ if __name__ == "__main__":
         max_node = max(node_pair[0], node_pair[1])
         result["non_terminal_%s_%s" % (min_node, max_node)] = DumpToStr(path_cache[(min_node, max_node)])
     result["universe"] = [[min(a), max(a)] for a in universe]
-    print (json.dumps(result))
+    print (json.dumps(result, ensure_ascii=False))
 
 
