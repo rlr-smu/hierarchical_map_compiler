@@ -86,6 +86,7 @@ MapNetwork *MapNetwork::MapNetworkFromJsonSpec(const json &network_spec) {
   clusters.back()->SetInternalExternalEdgesFromEdgeList(edges_in_map);
   return new MapNetwork(std::move(clusters), new_graph);
 }
+
 MapCluster *MapNetwork::root_cluster() const { return clusters_.back(); }
 
 unordered_map<Edge *, MapCluster *> MapNetwork::EdgeClusterMap() const {
@@ -167,13 +168,21 @@ pair<PsddNode *, PsddManager *> MapNetwork::CompileConstraint() const {
   unordered_map<MapCluster *, set<NodeSize>> terminal_entering_points =
       ConstructEntryPointsForTerminalPath();
   unordered_map<MapCluster *, set<pair<NodeSize, NodeSize>>>
-      non_terminal_entering_points =
-          ConstructEntryPointsForNonTerminalPath(edge_cluster_map);
+      non_terminal_entering_points  =
+         ConstructEntryPointsForNonTerminalPath(edge_cluster_map);
   LeafConstraintHandler *leaf_constraint_handler =
       LeafConstraintHandler::GetGraphillionSddLeafConstraintHandler(
           &edge_variable_map, &variable_to_edge_map, &local_vtree_per_cluster,
           &terminal_entering_points, &non_terminal_entering_points,
           graphillion_script_, graphillion_tmp_dir_, graphillion_thread_num_);
+
+  std::ofstream edge_var_file;
+  edge_var_file.open("edge_var_map.txt");
+  for(const auto &entry : edge_variable_map)
+  { 
+    edge_var_file << entry.first->edge_name() << " " << entry.second << std::endl;
+  }
+  edge_var_file.close();
   // start timer
   auto compilation_start_time = get_time::now();
   for (MapCluster *cur_cluster : clusters_) {
