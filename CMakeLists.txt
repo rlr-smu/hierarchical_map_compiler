@@ -1,30 +1,80 @@
-cmake_minimum_required(VERSION 3.9)
-project(psdd)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_C_STANDARD 99)
-set(CMAKE_CXX_FLAGS "-no-pie")
-
+cmake_minimum_required(VERSION 3.5)
+project(hierarchical_map_compiler)
 include_directories(include)
+include_directories(/usr/local/include)
+link_directories(/usr/local/lib)
 
-if(APPLE)
-  link_directories(lib/darwin)
-endif(APPLE)
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_C_STANDARD 99)
+include(ExternalProject)
+ExternalProject_Add(sdd_github
+  GIT_REPOSITORY   https://github.com/hahaXD/sdd.git
+  GIT_TAG          master
+  STEP_TARGETS build
+  EXCLUDE_FROM_ALL TRUE
+  )
+add_library(sdd UNKNOWN IMPORTED)
+ExternalProject_Get_Property(sdd_github binary_dir)
+set_target_properties(sdd PROPERTIES IMPORTED_LOCATION ${binary_dir}/libsdd.a)
+add_dependencies(sdd sdd_github-build)
+
+ExternalProject_Add(psdd_github
+  GIT_REPOSITORY   https://github.com/hahaXD/psdd.git
+  GIT_TAG          master
+  STEP_TARGETS build
+  EXCLUDE_FROM_ALL TRUE
+  BUILD_COMMAND    make psdd
+  )
+add_library(psdd UNKNOWN IMPORTED)
+ExternalProject_Get_Property(psdd_github binary_dir)
+set_target_properties(psdd PROPERTIES IMPORTED_LOCATION ${binary_dir}/libpsdd.a)
+add_dependencies(psdd psdd_github-build)
+
+
+ExternalProject_Add(googletest_github
+  GIT_REPOSITORY   https://github.com/google/googletest.git
+  GIT_TAG          release-1.10.0 
+  STEP_TARGETS build
+  EXCLUDE_FROM_ALL TRUE
+  )
+
+ExternalProject_Get_Property(googletest_github binary_dir)
+add_library(gtest UNKNOWN IMPORTED)
+add_library(gtest_main UNKNOWN IMPORTED)
+set_target_properties(gtest PROPERTIES
+  IMPORTED_LOCATION ${binary_dir}/lib/libgtest.a
+  )
+set_target_properties(gtest_main PROPERTIES
+  IMPORTED_LOCATION ${binary_dir}/lib/libgtest_main.a
+  )
+add_dependencies(gtest googletest_github-build)
+add_dependencies(gtest_main googletest_github-build)
+
+
+ExternalProject_Add(htd_github
+  GIT_REPOSITORY   https://github.com/mabseher/htd.git
+  GIT_TAG          master
+  STEP_TARGETS build
+  EXCLUDE_FROM_ALL TRUE
+  )
+add_library(htd UNKNOWN IMPORTED)
+ExternalProject_Get_Property(htd_github binary_dir)
 
 if(UNIX AND NOT APPLE)
-  link_directories(lib/linux)
-endif(UNIX AND NOT APPLE)  
+  set_target_properties(htd PROPERTIES IMPORTED_LOCATION ${binary_dir}/lib/libhtd.so)
+endif(UNIX AND NOT APPLE)
 
-set(gtest_main "libgtest_main.a")
-set(gtest "libgtest.a")
-set(sdd "libsdd.a")
-set(gmock "libgmock.a")
-set(gmock_main "libgmock_main.a")
+if(APPLE)
+  set_target_properties(htd PROPERTIES IMPORTED_LOCATION ${binary_dir}/lib/libhtd.dylib)
+endif(APPLE)
+add_dependencies(htd htd_github-build)
 
-file(GLOB PSDD_TEST_SRC_FILES "test/*.cpp")
-file(GLOB LIB_PSDD_SRC_FILES "src/*.h" "src/*.cpp" "src/*.c")
-#add_executable(psdd_test ${PSDD_TEST_SRC_FILES})
-add_library(psdd ${LIB_PSDD_SRC_FILES} )
-add_executable(psdd_inference psdd_inference_main.cpp)
-#target_link_libraries(psdd_test psdd ${gtest} ${gtest_main} ${gmock} ${gmock_main} ${sdd} gmp pthread)
-target_link_libraries(psdd_inference psdd sdd gmp)
+
+file(GLOB HIERARCHICAL_MAP_COMPILER_SRC_FILES "src/*.h" "src/*.cpp" "src/*.c")
+file(GLOB HIERARCHICAL_MAP_COMPILER_TEST_SRC_FILES "test/*.cpp")
+add_library(hmc ${HIERARCHICAL_MAP_COMPILER_SRC_FILES})
+add_executable(hmc_test ${HIERARCHICAL_MAP_COMPILER_TEST_SRC_FILES})
+add_executable(hmc_main main.cpp)
+target_link_libraries(hmc psdd sdd gmp htd)
+target_link_libraries(hmc_test hmc psdd sdd gmp gtest gtest_main htd pthread)
+target_link_libraries(hmc_main hmc psdd sdd gmp htd)
